@@ -26,6 +26,10 @@ parser.add_argument('-s', '--sources',
                     metavar='SOURCES TO ANNOTATE',
                     dest="s",
                     help='comma-separated list of source AFs to annotate (CCDG,CEPH,gnomAD)')
+parser.add_argument('-c', '--cov',
+                    metavar='SOURCES TO USE FOR COVERAGE',
+                    dest="c",
+                    help='comma-separated list of sources (CCDG,CEPH,gnomAD) to use for coverage calculations (default is whatever input is entered with -s)')
 parser.add_argument('-ci', '--ci',
                     metavar='USE CI BOUNDARIES',
                     dest="ci",
@@ -54,41 +58,50 @@ else:
     output_vcf = args.o
 if args.s is not None:
     sources = args.s.split(',')
-    print 'Annotating with the following sources:'
+#    print 'Annotating with the following sources:'
     minfs = {}
     for s in sources:
         if s != 'CCDG' and s != 'CEPH' and s != 'gnomAD':
             raise NameError(s + ' is an unexpected source; acceptable sources include (case-sensitive): CCDG  CEPH  gnomAD')
-        print s
+#        print s
 else:
     raise NameError('Please specify which data sources you would like to annotate with (CCDG,CEPH,gnomAD) using -s')
+if args.c is not None:
+    cov_sources = args.c.split(',')
+    for c in cov_sources:
+        if c != 'CCDG' and c != 'CEPH' and c != 'gnomAD':
+            raise NameError(c + ' is an unexpected source; acceptable sources include (case-sensitive): CCDG  CEPH  gnomAD')
+else:
+    cov_sources = args.s.split(',')
 if args.b is not None:
     bed = gzip.open(args.b, 'r')
     print 'Reading the following data source file:'
     print args.b
-    datas = {}
+    datas = []
     for line in bed:
         fields = line.rstrip().split('\t')
         chrom,start,end,svtype,source,sv_id = fields[0:6]#],fields[1],fields[2],fields[3],fields[4],fields[5]
-        if source not in datas:
-            datas[source] = []
-        datas[source].append([str(chrom),str(start),str(end),svtype,source,str(sv_id)])
-    if 'CCDG' in sources:
-        print 'Loading CCDG...'
-        ccdgbed = BedTool(datas['CCDG'])
-        ccdgs = {}
-    if 'CEPH' in sources:
-        print 'Loading CEPH...'
-        cephbed = BedTool(datas['CEPH'])
-        cephs = {}
-    if 'gnomAD' in sources:
-        print 'Loading gnomAD...'
-        gnomadbed = BedTool(datas['gnomAD'])
-        gnomads = {}
+        if source in cov_sources:
+            datas.append([str(chrom),str(start),str(end),svtype,source,str(sv_id)])
+    print 'Loading ' + ' and '.join(cov_sources) + ' into temporary BED...'
+    covbed = BedTool(datas)
+    covs = {}
+#    if 'CCDG' in sources:
+#        print 'Loading CCDG...'
+#        ccdgbed = BedTool(datas['CCDG'])
+#        ccdgs = {}
+#    if 'CEPH' in sources:
+#        print 'Loading CEPH...'
+#        cephbed = BedTool(datas['CEPH'])
+#        cephs = {}
+#    if 'gnomAD' in sources:
+#        print 'Loading gnomAD...'
+#        gnomadbed = BedTool(datas['gnomAD'])
+#        gnomads = {}
 else:
     raise NameError('Please include path to bed file containing combined data sources using -b')
 
-def coverages(intersect,source):
+def coverages(intersect):
     svs = {}
     overlaps = {}
     for interval in intersect:
@@ -117,12 +130,13 @@ def coverages(intersect,source):
             coverage = tmpA.coverage(tmpB)
             for sv in coverage:
                 cov_frac = sv[7]
-                if source == 'CCDG':
-                    ccdgs[key] = float(cov_frac)
-                if source == 'CEPH':
-                    cephs[key] = float(cov_frac)
-                if source == 'gnomAD':
-                    gnomads[key] = float(cov_frac)
+                covs[key] = float(cov_frac)
+#                if source == 'CCDG':
+#                    ccdgs[key] = float(cov_frac)
+#                if source == 'CEPH':
+#                    cephs[key] = float(cov_frac)
+#                if source == 'gnomAD':
+#                    gnomads[key] = float(cov_frac)
 
 tmp = []
 print 'Creating temporary BED from VCF file ' + args.i
@@ -159,35 +173,41 @@ for v in vcf:
             end = start + 1
     sv_id = v.ID
     sv = str(chrom) + ':' + str(start) + ':' + str(end) + ':' +svtype
-    if 'CCDG' in sources:
-        if sv_id not in ccdgs:
-            ccdgs[sv_id] = float(0)
-    if 'CEPH' in sources:
-        if sv_id not in cephs:
-            cephs[sv_id] = float(0)
-    if 'gnomAD' in sources:
-        if sv_id not in gnomads:
-            gnomads[sv_id] = float(0)
+    if sv_id not in covs:
+        covs[sv_id] = float(0)
+#    if 'CCDG' in sources:
+#        if sv_id not in ccdgs:
+#            ccdgs[sv_id] = float(0)
+#    if 'CEPH' in sources:
+#        if sv_id not in cephs:
+#            cephs[sv_id] = float(0)
+#    if 'gnomAD' in sources:
+#        if sv_id not in gnomads:
+#            gnomads[sv_id] = float(0)
     out = [str(chrom), str(start), str(end), svtype, str(sv_id)]
     tmp.append(out)
 
 vcf.close(); vcf = cyvcf2.VCF(args.i)
 tmpbed = BedTool(tmp)
-if 'CCDG' in sources:
-    print 'Looking for CCDG coverages...'
-    intersect = tmpbed.intersect(ccdgbed, wao = True)
-    coverages(intersect,'CCDG')
-    vcf.add_info_to_header({'ID': 'CCDG_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from CCDG', 'Type': 'Float', 'Number': '1'})
-if 'CEPH' in sources:
-    print 'Looking for CEPH coverages...'
-    intersect = tmpbed.intersect(cephbed, wao = True)
-    coverages(intersect,'CEPH')
-    vcf.add_info_to_header({'ID': 'CEPH_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from CEPH', 'Type': 'Float', 'Number': '1'})
-if 'gnomAD' in sources:
-    print 'Looking for gnomAD overlaps...'
-    intersect = tmpbed.intersect(gnomadbed, wao = True)
-    coverages(intersect,'gnomAD')
-    vcf.add_info_to_header({'ID': 'gnomAD_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from gnomAD', 'Type': 'Float', 'Number': '1'})
+print 'Looking for coverages...'
+intersect = tmpbed.intersect(covbed, wao = True)
+coverages(intersect)
+vcf.add_info_to_header({'ID': 'SV_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from ' + ' and '.join(cov_sources), 'Type': 'Float', 'Number': '1'})
+#if 'CCDG' in sources:
+#    print 'Looking for CCDG coverages...'
+#    intersect = tmpbed.intersect(ccdgbed, wao = True)
+#    coverages(intersect,'CCDG')
+#    vcf.add_info_to_header({'ID': 'CCDG_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from CCDG', 'Type': 'Float', 'Number': '1'})
+#if 'CEPH' in sources:
+#    print 'Looking for CEPH coverages...'
+#    intersect = tmpbed.intersect(cephbed, wao = True)
+#    coverages(intersect,'CEPH')
+#    vcf.add_info_to_header({'ID': 'CEPH_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from CEPH', 'Type': 'Float', 'Number': '1'})
+#if 'gnomAD' in sources:
+#    print 'Looking for gnomAD overlaps...'
+#    intersect = tmpbed.intersect(gnomadbed, wao = True)
+#    coverages(intersect,'gnomAD')
+#    vcf.add_info_to_header({'ID': 'gnomAD_Cov', 'Description': 'The amount of the SV that is covered by matching SV events from gnomAD', 'Type': 'Float', 'Number': '1'})
 
 print 'Adding found coverages to output VCF...'
 new_vcf = Writer(output_vcf, vcf)
@@ -220,15 +240,17 @@ for v in vcf:
             end = start + 1
     sv_id = v.ID
     sv = str(chrom) + ':' + str(start) + ':' + str(end) + ':' +svtype
-    if 'CCDG' in sources:
-        ccdg_cov = ccdgs[sv_id]
-        v.INFO['CCDG_Cov'] = ccdg_cov
-    if 'CEPH' in sources:
-        ceph_cov = cephs[sv_id]
-        v.INFO['CEPH_Cov'] = ceph_cov
-    if 'gnomAD' in sources:
-        gnomad_cov = gnomads[sv_id]
-        v.INFO['gnomAD_Cov'] = gnomad_cov
+    cov = covs[sv_id]
+    v.INFO['SV_Cov'] = cov
+#    if 'CCDG' in sources:
+#        ccdg_cov = ccdgs[sv_id]
+#        v.INFO['CCDG_Cov'] = ccdg_cov
+#    if 'CEPH' in sources:
+#        ceph_cov = cephs[sv_id]
+#        v.INFO['CEPH_Cov'] = ceph_cov
+#    if 'gnomAD' in sources:
+#        gnomad_cov = gnomads[sv_id]
+#        v.INFO['gnomAD_Cov'] = gnomad_cov
     new_vcf.write_record(v)
 
 new_vcf.close(); vcf.close()
